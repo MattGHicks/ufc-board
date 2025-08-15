@@ -145,64 +145,62 @@ export default function EventPicksPage() {
 
   // ---------- Save to DB (selective merge; no full refetch) ----------
   async function savePickNow(fight: Fight) {
-    if (!userId) { setError('Please sign in.'); return; }
-    if (!eventIdIsValid) { setError('Invalid event URL.'); return; }
-    if (!UUID_RE.test(leagueId)) { setError('Please select a league.'); return; }
+  if (!userId) { setError('Please sign in.'); return; }
+  if (!eventIdIsValid) { setError('Invalid event URL.'); return; }
+  if (!UUID_RE.test(leagueId)) { setError('Please select a league.'); return; }
 
-    const current = picks[fight.id];
-    if (!current) return;
-    if (!methods.includes(current.method)) { setError('Invalid method selected.'); return; }
+  const current = picks[fight.id];
+  if (!current) return;
+  if (!methods.includes(current.method)) { setError('Invalid method selected.'); return; }
 
-    setSaving(prev => ({ ...prev, [fight.id]: true }));
-    setError(null);
+  setSaving(prev => ({ ...prev, [fight.id]: true }));
 
-    // per‑fight request token to ignore stale responses
-    const token = Date.now();
-    saveTokenRef.current[fight.id] = token;
+  // per‑fight request token to ignore stale responses
+  const token = Date.now();
+  saveTokenRef.current[fight.id] = token;
 
-    const payload = {
-      user_id: userId,
-      league_id: leagueId,
-      event_id: eventId,
-      fight_id: fight.id,
-      winner: current.winner,
-      method: current.method,
-      round: current.method === 'DEC' ? null : (current.round ?? null),
-    };
+  const payload = {
+    user_id: userId,
+    league_id: leagueId,
+    event_id: eventId,
+    fight_id: fight.id,
+    winner: current.winner,
+    method: current.method,
+    round: current.method === 'DEC' ? null : (current.round ?? null),
+  };
 
-    const { data: saved, error: upErr } = await supabase
-      .from('picks')
-      .upsert(payload, { onConflict: 'user_id,league_id,fight_id' })
-      .select()
-      .single();
+  const { data: saved, error: upErr } = await supabase
+    .from('picks')
+    .upsert(payload, { onConflict: 'user_id,league_id,fight_id' })
+    .select()
+    .single();
 
-    // if a newer save started, ignore this response
-    if (saveTokenRef.current[fight.id] !== token) {
-      return;
-    }
+  // If a newer save started since we sent this, ignore this response
+  if (saveTokenRef.current[fight.id] !== token) return;
 
-    if (upErr) {
-      setError(upErr.message);
-    } else if (saved) {
-      // merge only this fight’s saved row
-      setPicks(prev => ({
+  if (upErr) {
+    setError(upErr.message);
+  } else if (saved) {
+    // ✅ Keep local winner/method/round (optimistic UI),
+    //    only patch server IDs/foreign keys so state won't "snap back".
+    setPicks(prev => {
+      const local = prev[fight.id] ?? current;
+      return {
         ...prev,
         [fight.id]: {
-          id: saved.id,
-          user_id: saved.user_id,
-          league_id: saved.league_id,
+          ...local,                // keep local winner/method/round
+          id: saved.id,            // adopt server row id
+          league_id: saved.league_id, // keep FK in sync
           event_id: saved.event_id,
           fight_id: saved.fight_id,
-          winner: saved.winner,
-          method: saved.method,
-          round: saved.round,
         },
-      }));
-      setSavedAt(prev => ({ ...prev, [fight.id]: Date.now() }));
-    }
-
-    setSaving(prev => ({ ...prev, [fight.id]: false }));
+      };
+    });
+    setSavedAt(prev => ({ ...prev, [fight.id]: Date.now() }));
   }
+
+  setSaving(prev => ({ ...prev, [fight.id]: false }));
+}
 
   // Debounce a save per fight (400ms)
   function scheduleAutoSave(fight: Fight) {
@@ -407,9 +405,15 @@ export default function EventPicksPage() {
               </div>
 
               {/* Saving status */}
-              <div className="text-xs opacity-70 h-5">
-                {isSaving ? 'Saving…' : (savedAt[f.id] ? 'Saved' : '')}
-              </div>
+              <div className="text-xs h-5">
+                {isSaving
+                  ? <span className="opacity-70">Saving…</span>
+                  : savedAt[f.id]
+                    ? (savedAt[f.id] > 0
+                      ? <span className="text-green-600">Saved</span>
+                      : <span className="text-red-600">Failed</span>)
+                    : null}
+                </div>
             </div>
           );
         })}
